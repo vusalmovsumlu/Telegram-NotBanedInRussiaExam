@@ -7,8 +7,9 @@ public class Message
     public User Sender { get; set; }
     public int ReceiverId { get; set; }
     public User Receiver { get; set; }
-    public int SenderIp { get; set; }
-    public int ReceiverIp { get; set; }
+    public string SenderIp { get; set; }
+    public string ReceiverIp { get; set; }
+    public string MessageType { get; set; }
     public string Content { get; set; }
     public DateTime Timestamp { get; set; }
 

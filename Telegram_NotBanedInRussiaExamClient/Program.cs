@@ -1,264 +1,557 @@
-﻿using Microsoft.Identity.Client;
-using System;
-using System.Linq;
-using System.Net;
-using System.Net.Mail;
-using System.Net.Sockets;
-using Telegram_NotBanedInRussiaExam.DAL;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using Telegram_NotBanedInRussiaExam.Enteties;
 
 namespace Telegram_NotBanedInRussiaExamClient
 {
     class Program
     {
-        static User CurrentUser = null;
+        private const string ServerIp = "127.0.0.1";
+        private const int ServerPort = 5000;
+
+        private static User? currentUser;
+        private static System.Net.Sockets.TcpClient? client;
+        private static BinaryReader? br;
+        private static BinaryWriter? bw;
+        private static Thread? listenThread;
+        private static readonly AutoResetEvent responseReceived = new AutoResetEvent(false);
+        private static List<UserListItem> lastUsers = new List<UserListItem>();
+
+        [DllImport("winmm.dll", EntryPoint = "mciSendString")]
+        private static extern long mciSendString(string command, string? returnValue, int returnLength, IntPtr winHandle);
 
         static void Main(string[] args)
         {
-            while (CurrentUser == null)
-            {
-                Console.Clear();
-                Console.WriteLine("=== TELEGRAM (Not Banned) ===");
-                Console.WriteLine("1. Daxil ol (Login)");
-                Console.WriteLine("2. Qeydiyyatdan keç (Register)");
-                Console.Write("Seçiminiz: ");
-                string secim = Console.ReadLine();
+            Console.Title = "Telegram Client";
 
-                if (secim == "1")
-                {
-                    Login();
-                }
-                else if (secim == "2")
-                {
-                    Register();
-                }
+            while (true)
+            {
+                MainMenu();
             }
-            MainMenu();
         }
 
-        static void Register()
+        private static void Register()
         {
             Console.Clear();
-            Console.WriteLine("--- QEYDİYYAT ---");
+            Console.WriteLine("--- QEYDIYYAT ---");
             Console.Write("Yeni Username daxil edin: ");
-            string username = Console.ReadLine();
+            string? username = Console.ReadLine();
+
             Console.Write("Email daxil edin: ");
-            string email = Console.ReadLine();
-            Console.Write("Parol təyin edin: ");
-            string password = Console.ReadLine();
-            Random rnd = new Random();
-            int verificationCode = rnd.Next(100000, 999999);
-           
-            try
-            {                          
-                MailMessage mail = new MailMessage();
-                mail.From = new MailAddress("vusal.2008.27@gmail.com");
-                mail.To.Add(email);
-                mail.Subject = "Telegram Qeydiyyat Kodu";
-                mail.Body = $"Sizin təsdiq kodunuz: {verificationCode}";
+            string? email = Console.ReadLine();
 
-                SmtpClient smtp = new SmtpClient("smtp.gmail.com", 587);
-                smtp.Credentials = new NetworkCredential("senin_emailin@gmail.com", "app_password_bura_yazilir");
-                smtp.EnableSsl = true;
-                smtp.Send(mail);
-                
+            Console.Write("Parol teyin edin: ");
+            string? password = Console.ReadLine();
 
-               
-                Console.WriteLine($"\n[SİSTEM MESAJI] {email} ünvanına kod göndərildi. (SİMULYASİYA KOD: {verificationCode})");
-            }
-            catch (Exception ex)
+            if (string.IsNullOrWhiteSpace(username) ||
+                string.IsNullOrWhiteSpace(email) ||
+                string.IsNullOrWhiteSpace(password))
             {
-                Console.WriteLine("Mail göndərilərkən xəta: " + ex.Message);
+                Console.WriteLine("Butun melumatlari doldurun.");
+                Console.ReadLine();
                 return;
             }
 
-            Console.Write("\nEmailə gələn 6 rəqəmli kodu daxil edin: ");
-            int userInput;
-            if (int.TryParse(Console.ReadLine(), out userInput) && userInput == verificationCode)
+            // Server sene email ile 6 reqemli kod gonderir.
+            try
             {
-                using (var context = new TelegramDbContext())
-                {
-                    if (context.Users.Any(u => u.Name == username))
-                    {
-                        Console.WriteLine("Bu Username artıq məşğuldur! Davam etmək üçün Enter basın...");
-                        Console.ReadLine();
-                        return;
-                    }
+                client = new System.Net.Sockets.TcpClient();
+                client.Connect(ServerIp, ServerPort);
+                br = new BinaryReader(client.GetStream(), Encoding.UTF8, true);
+                bw = new BinaryWriter(client.GetStream(), Encoding.UTF8, true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Servere qosulmaq olmadi: " + ex.Message);
+                Console.ReadLine();
+                return;
+            }
 
-                    var newUser = new User
-                    {
-                        Name = username,
-                        Email = email,
-                        Password = password,
-                        IsOnline = false
-                    };
+            bw.Write($"register_request|{email}");
+            string response = br.ReadString();
+            if (response != "tesdiq kodu gonderildi.")
+            {
+                PrintError(response);
+                Console.ReadLine();
+                return;
+            }
 
-                    context.Users.Add(newUser);
-                    context.SaveChanges();
-                    Console.WriteLine("Qeydiyyat uğurla tamamlandı!");
-                    Console.ReadLine();
-                }
+            Console.WriteLine($"[SISTEM] {email} unvanina kod gonderildi.");
+            Console.Write("Emaile gelen kodu daxil edin: ");
+            string? code = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                Console.WriteLine("Tesdiq kodu bos ola bilmez.");
+                Console.ReadLine();
+                return;
+            }
+
+            bw.Write($"register_complete|{email}|{code}|{username}|{password}");
+            response = br.ReadString();
+            if (response == "qeydiyyat tamamlandi.")
+            {
+                Console.WriteLine("Qeydiyyat ugurla tamamlandi! Indi sisteme daxil ola bilersiniz.");
             }
             else
             {
-                Console.WriteLine("Yanlış kod daxil etdiniz");
-                Console.ReadLine();
+                PrintError(response);
             }
+
+            Console.ReadLine();
         }
 
-        static void Login()
+        private static void Login()
         {
             Console.Clear();
-            Console.WriteLine("--- GİRİŞ ---");
-            Console.Write("Username: ");
-            string username = Console.ReadLine();
+            Console.WriteLine("--- LOGIN ---");
+            Console.Write("username: ");
+            string? username = Console.ReadLine();
+            Console.Write("password: ");
+            string? password = Console.ReadLine();
 
-            Console.Write("Parol: ");
-            string password = Console.ReadLine();
-
-            using (var context = new TelegramDbContext())
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
             {
-                var user = context.Users.FirstOrDefault(u => u.Name == username && u.Password == password);
-
-                if (user != null)
-                {
-                    CurrentUser = user;
-                    user.IsOnline = true;
-                    context.SaveChanges();
-
-                    Console.WriteLine($"Xoş gəldin, {user.Name}! (Davam etmək üçün Enter)");
-                    Console.ReadLine();
-                }
-                else
-                {
-                    Console.WriteLine("Username və ya parol yanlışdır! (Davam etmək üçün Enter)");
-                    Console.ReadLine();
-                }
+                Console.WriteLine("username ve password daxil edin.");
+                Console.ReadLine();
+                return;
             }
+
+            try
+            {
+                client = new System.Net.Sockets.TcpClient();
+                client.Connect(ServerIp, ServerPort);
+                br = new BinaryReader(client.GetStream(), Encoding.UTF8, true);
+                bw = new BinaryWriter(client.GetStream(), Encoding.UTF8, true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Servere qosulmaq olmadi: " + ex.Message);
+                Console.ReadLine();
+                return;
+            }
+
+            bw.Write($"login|{username}|{password}");
+            string response = br.ReadString();
+            string[] parts = response.Split('|');
+            if (parts.Length >= 2 && int.TryParse(parts[0], out int userId))
+            {
+                currentUser = new User
+                {
+                    Id = userId,
+                    Name = parts[1],
+                    Password = string.Empty,
+                    Email = string.Empty,
+                    IsOnline = true
+                };
+
+                listenThread = new Thread(ListenForMessages);
+                listenThread.IsBackground = true;
+                listenThread.Start();
+
+                Console.WriteLine($"Xos geldin, {currentUser.Name}");
+            }
+            else
+            {
+                PrintError(response);
+            }
+
+            Console.ReadLine();
         }
 
-        static void MainMenu()
+        private static void MainMenu()
         {
             while (true)
             {
                 Console.Clear();
-                Console.WriteLine($"[ Profil: {CurrentUser.Name} ]");
+                Console.WriteLine(currentUser == null ? "Profil: guest" : $"Profil: {currentUser.Name}");
                 Console.WriteLine("Menu:");
                 Console.WriteLine("1. Show Users");
                 Console.WriteLine("2. Go Chat");
-                Console.WriteLine("3. Çıxış");
-                Console.Write("Seçiminiz: ");
-                string secim = Console.ReadLine();
+                Console.WriteLine(currentUser == null ? "3. Login" : "3. Logout");
+                Console.WriteLine("4. Register");
+                Console.Write("Seciminiz: ");
 
-                if (secim == "1")
+                string? choice = Console.ReadLine();
+                if (choice == "1")
                 {
                     ShowUsers();
                 }
-                else if (secim == "2")
+                else if (choice == "2")
                 {
                     GoChat();
                 }
-                else if (secim == "3")
+                else if (choice == "3")
                 {
-                    using (var context = new TelegramDbContext())
+                    if (currentUser == null)
                     {
-                        var user = context.Users.Find(CurrentUser.Id);
-                        if (user != null)
-                        {
-                            user.IsOnline = false;
-                            context.SaveChanges();
-                        }
+                        Login();
                     }
-                    CurrentUser = null;
-                    break;
+                    else
+                    {
+                        Logout();
+                    }
+                }
+                else if (choice == "4")
+                {
+                    if (currentUser != null)
+                    {
+                        Console.WriteLine("Yeni account ucun evvel Logout edin.");
+                        Console.ReadLine();
+                    }
+                    else
+                    {
+                        Register();
+                    }
                 }
             }
         }
 
-        static void ShowUsers()
+        private static void ShowUsers()
         {
             Console.Clear();
-            Console.WriteLine("--- SİSTEMDƏKİ İSTİFADƏÇİLƏR ---");
-            using (var context = new TelegramDbContext())
+            Console.WriteLine("--- USERS ---");
+
+            RequestUsers();
+            foreach (UserListItem user in lastUsers.Where(u => currentUser == null || u.id != currentUser.Id))
             {
-                var allUsers = context.Users.Where(u => u.Id != CurrentUser.Id).ToList();
-                foreach (var user in allUsers)
-                {
-                    string status = user.IsOnline ? "[Online]" : "[Offline]";
-                    Console.WriteLine($"ID: {user.Id} | Username: {user.Name} {status}");
-                }
+                string status = user.isOnline ? "Online" : "Offline";
+                Console.WriteLine($"ID: {user.id} | username: {user.username} | email: {user.email} | {status}");
             }
-            Console.WriteLine("\nGeri qayıtmaq üçün Enter basın...");
+
+            Console.WriteLine("\nEnter basib geri qayidin...");
             Console.ReadLine();
         }
 
-        static void GoChat()
+        private static void GoChat()
         {
             Console.Clear();
-            Console.WriteLine("--- ÇATA BAŞLA ---");
-            Console.Write("Mesaj yazmaq istədiyiniz istifadəçinin ID-sini daxil edin: ");
-            int targetUserId;
-
-            if (int.TryParse(Console.ReadLine(), out targetUserId))
+            Console.WriteLine("--- CHAT ---");
+            if (currentUser == null)
             {
-                Console.WriteLine($"\nID {targetUserId} ilə çat başladılır...");
-                Console.WriteLine("Nə göndərmək istəyirsiniz?");
-                Console.WriteLine("1. Text\n2. File/Image\n3. Voice");
-                Console.Write("Seçiminiz: ");
-                string secim = Console.ReadLine();
-                string messageType = "";
-                string content = "";
-                switch (secim)
+                Console.WriteLine("Chat ucun evvel Login olun ve ya Register edin.");
+                Console.WriteLine("1. Login");
+                Console.WriteLine("2. Register");
+                Console.Write("Seciminiz: ");
+                string? authChoice = Console.ReadLine();
+                if (authChoice == "1")
                 {
-                    case "1":
-                        messageType = "text";
-                        Console.Write("Mesajınızı yazın: ");
-                        content = Console.ReadLine();
-                        break;
-                    case "2":
-                        messageType = "image";
-                        Console.Write("Şəklin kompüterdəki yolunu daxil edin (məs: C:\\sekil.png): ");
-                        content = Console.ReadLine();
-                        break;
-                    case "3":
-                        messageType = "voice";
-                        Console.Write("Səs faylının yolunu daxil edin (məs: C:\\ses.wav): ");
-                        content = Console.ReadLine();
-                        break;
-                    default:
-                        Console.WriteLine("Yanlış seçim etdiniz");
-                        Console.ReadLine();
-                        return;
+                    Login();
+                }
+                else if (authChoice == "2")
+                {
+                    Register();
+                    Login();
                 }
 
-                try
+                if (currentUser == null)
                 {
-                    using (var client = new TcpClient())
-                    {                        
-                        client.Connect("127.0.0.1", 5000);
-                        string gedenData = $"{CurrentUser.Id}|{targetUserId}|{messageType}|{content}";
-                        byte[] dataBytes = System.Text.Encoding.UTF8.GetBytes(gedenData);
-                        using (NetworkStream stream = client.GetStream())
-                        {
-                            stream.Write(dataBytes, 0, dataBytes.Length);
-                        }
-                        Console.WriteLine("\n[+] Mesaj uğurla serverə göndərildi!");
+                    return;
+                }
+
+                Console.Clear();
+                Console.WriteLine("--- CHAT ---");
+            }
+
+            RequestUsers();
+            foreach (UserListItem user in lastUsers.Where(u => currentUser == null || u.id != currentUser.Id))
+            {
+                Console.WriteLine($"ID: {user.id} | {user.username} | {(user.isOnline ? "Online" : "Offline")}");
+            }
+
+            Console.Write("Mesaj gondereceyiniz user ID: ");
+            if (!int.TryParse(Console.ReadLine(), out int receiverId) || lastUsers.All(u => u.id != receiverId))
+            {
+                Console.WriteLine("Duzgun ID daxil edin.");
+                Console.ReadLine();
+                return;
+            }
+
+            Console.WriteLine("Chat basladi. Cixmaq ucun /exit yazin.");
+
+            while (true)
+            {
+                Console.WriteLine("\nNe gondermek isteyirsiniz?");
+                Console.WriteLine("1. Text");
+                Console.WriteLine("2. File/Image");
+                Console.WriteLine("3. Voice message");
+                Console.WriteLine("4. Exit Chat");
+                Console.Write("Seciminiz: ");
+
+                string? choice = Console.ReadLine();
+                if (choice == "4" || choice == "/exit")
+                {
+                    break;
+                }
+
+                string messageType;
+                string content;
+
+                if (choice == "1")
+                {
+                    messageType = "text";
+                    Console.Write("Mesaj: ");
+                    content = Console.ReadLine() ?? string.Empty;
+                    if (content == "/exit")
+                    {
+                        break;
                     }
                 }
-                catch (Exception ex)
+                else if (choice == "2")
                 {
-                    Console.WriteLine($"Xəta baş verdi: {ex.Message}");
-
+                    messageType = "file";
+                    Console.Write("Fayl path-i: ");
+                    string? filePath = Console.ReadLine();
+                    content = BuildFileContent(filePath);
+                    if (content.Length == 0)
+                    {
+                        continue;
+                    }
+                }
+                else if (choice == "3")
+                {
+                    messageType = "voice";
+                    content = RecordVoice();
+                    if (content.Length == 0)
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Yanlis choice.");
+                    continue;
                 }
 
-                Console.WriteLine("\nGeri qayıtmaq üçün Enter basın...");
-                Console.ReadLine();
+                bw?.Write($"send|{receiverId}|{messageType}|{content}");
+                Console.WriteLine("Mesaj gonderildi.");
+            }
+        }
+
+        private static void ListenForMessages()
+        {
+            try
+            {
+                while (br != null)
+                {
+                    string packet = br.ReadString();
+                    HandleIncomingPacket(packet);
+                }
+            }
+            catch
+            {
+                Console.WriteLine("\nServer baglantisi kesildi.");
+            }
+        }
+
+        private static void HandleIncomingPacket(string packet)
+        {
+            if (packet.StartsWith("user_list|"))
+            {
+                string json = packet.Substring("user_list|".Length);
+                try
+                {
+                    lastUsers = JsonSerializer.Deserialize<List<UserListItem>>(json) ?? new List<UserListItem>();
+                }
+                catch
+                {
+                    lastUsers = new List<UserListItem>();
+                }
+                responseReceived.Set();
+                return;
+            }
+
+            if (!packet.StartsWith("user_list|") && !packet.StartsWith("msg|"))
+            {
+                responseReceived.Set();
+                return;
+            }
+
+            string[] parts = packet.Split('|');
+            if (parts.Length < 4 || parts[0] != "msg")
+            {
+                return;
+            }
+
+            string senderId = parts[1];
+            string messageType = parts[2];
+            string content = string.Join("|", parts.Skip(3));
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            if (messageType == "text")
+            {
+                Console.WriteLine($"\n[User {senderId}]: {content}");
+            }
+            else if (messageType == "file" || messageType == "voice")
+            {
+                string savedPath = SaveIncomingFile(content, messageType);
+                Console.WriteLine($"\n[User {senderId}] {messageType} gonderdi: {savedPath}");
             }
             else
             {
-                Console.WriteLine("Düzgün ID daxil etmədiniz");
-                Console.ReadLine();
+                Console.WriteLine($"\n[User {senderId}] [{messageType}]: {content}");
             }
+            Console.ResetColor();
+        }
+
+        private static void RequestUsers()
+        {
+            if (client == null || bw == null || br == null)
+            {
+                try
+                {
+                    client = new System.Net.Sockets.TcpClient();
+                    client.Connect(ServerIp, ServerPort);
+                    br = new BinaryReader(client.GetStream(), Encoding.UTF8, true);
+                    bw = new BinaryWriter(client.GetStream(), Encoding.UTF8, true);
+                }
+                catch
+                {
+                    Console.WriteLine("Servere qosulmaq olmadi.");
+                    return;
+                }
+            }
+
+            if (currentUser == null)
+            {
+                bw.Write("get_users");
+
+                if (br != null)
+                {
+                    string packet = br.ReadString();
+                    if (packet.StartsWith("user_list|"))
+                    {
+                        HandleIncomingPacket(packet);
+                    }
+                }
+                return;
+            }
+
+            responseReceived.Reset();
+            bw.Write("get_users");
+            responseReceived.WaitOne(2000);
+        }
+
+        private static string BuildFileContent(string? filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            {
+                Console.WriteLine("Fayl tapilmadi.");
+                return string.Empty;
+            }
+
+            try
+            {
+                string fileName = Path.GetFileName(filePath);
+                string base64 = Convert.ToBase64String(File.ReadAllBytes(filePath));
+                return $"{fileName};{base64}";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Fayl oxunmadi: " + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        private static string RecordVoice()
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Console.WriteLine("Voice recording only works on Windows with winmm.dll.");
+                return string.Empty;
+            }
+
+            Console.WriteLine("Sesi baslatmaq ucun S, dayandirmaq ucun E basin.");
+
+            while (Console.ReadKey(true).Key != ConsoleKey.S)
+            {
+            }
+
+            Console.WriteLine("Ses yazilir...");
+            if (mciSendString("open new Type waveaudio Alias recsound", null, 0, IntPtr.Zero) != 0 ||
+                mciSendString("record recsound", null, 0, IntPtr.Zero) != 0)
+            {
+                Console.WriteLine("Ses yazma baslamadi.");
+                mciSendString("close recsound", null, 0, IntPtr.Zero);
+                return string.Empty;
+            }
+
+            while (Console.ReadKey(true).Key != ConsoleKey.E)
+            {
+            }
+
+            string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VoiceMessages");
+            Directory.CreateDirectory(folder);
+            string filePath = Path.Combine(folder, $"voice_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+            long saveResult = mciSendString($"save recsound \"{filePath}\"", null, 0, IntPtr.Zero);
+            mciSendString("close recsound", null, 0, IntPtr.Zero);
+
+            if (saveResult != 0 || !File.Exists(filePath))
+            {
+                Console.WriteLine("Ses fayli saxlanmadi.");
+                return string.Empty;
+            }
+
+            Console.WriteLine("Ses yazildi.");
+            return BuildFileContent(filePath);
+        }
+
+        private static string SaveIncomingFile(string content, string messageType)
+        {
+            int separatorIndex = content.IndexOf(';');
+            if (separatorIndex <= 0 || separatorIndex == content.Length - 1)
+            {
+                return "fayl format xetasi";
+            }
+
+            try
+            {
+                string fileName = Path.GetFileName(content.Substring(0, separatorIndex));
+                string base64 = content.Substring(separatorIndex + 1);
+                string folderName = messageType == "voice" ? "ReceivedVoiceMessages" : "ReceivedFiles";
+                string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, folderName);
+                Directory.CreateDirectory(folder);
+
+                string savePath = Path.Combine(folder, $"{DateTime.Now:yyyyMMdd_HHmmss}_{fileName}");
+                File.WriteAllBytes(savePath, Convert.FromBase64String(base64));
+                return savePath;
+            }
+            catch (Exception ex)
+            {
+                return "fayl saxlanmadi: " + ex.Message;
+            }
+        }
+
+        private static void PrintError(string response)
+        {
+            Console.WriteLine(response);
+        }
+
+        private static void Logout()
+        {
+            try
+            {
+                bw?.Close();
+                br?.Close();
+                client?.Close();
+            }
+            catch
+            {
+            }
+
+            currentUser = null;
+            bw = null;
+            br = null;
+            client = null;
+        }
+
+        private class UserListItem
+        {
+            public int id { get; set; }
+            public string username { get; set; } = string.Empty;
+            public string email { get; set; } = string.Empty;
+            public bool isOnline { get; set; }
         }
     }
 }
