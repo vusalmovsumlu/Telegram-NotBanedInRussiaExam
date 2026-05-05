@@ -7,7 +7,7 @@ namespace Telegram_NotBanedInRussiaExamClient
 {
     class Program
     {
-        private const string ServerIp = "127.0.0.1";
+        private const string ServerIp = "172.17.0.70";
         private const int ServerPort = 5000;
 
         private static User? currentUser;

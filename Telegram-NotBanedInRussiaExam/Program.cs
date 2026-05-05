@@ -25,7 +25,7 @@ namespace Telegram_NotBanedInRussiaExam
 
         static void Main(string[] args)
         {
-            var ep = new IPEndPoint(IPAddress.Any, 5000);
+            var ep = new IPEndPoint(IPAddress.Parse("172.17.0.70"), 5000);
 
             listener = new TcpListener(ep);
             listener.Start();
