@@ -27,6 +27,11 @@ namespace Telegram_NotBanedInRussiaExamClient
 
             while (true)
             {
+                while (currentUser == null)
+                {
+                    StartMenu();
+                }
+
                 MainMenu();
             }
         }
@@ -160,17 +165,33 @@ namespace Telegram_NotBanedInRussiaExamClient
             Console.ReadLine();
         }
 
+        private static void StartMenu()
+        {
+            Console.Clear();
+            Console.WriteLine("1. Login");
+            Console.WriteLine("2. Register");
+            Console.Write("Seciminiz: ");
+
+            string? choice = Console.ReadLine();
+            if (choice == "1")
+            {
+                Login();
+            }
+            else if (choice == "2")
+            {
+                Register();
+            }
+        }
+
         private static void MainMenu()
         {
-            while (true)
+            while (currentUser != null)
             {
                 Console.Clear();
-                Console.WriteLine(currentUser == null ? "Profil: guest" : $"Profil: {currentUser.Name}");
-                Console.WriteLine("Menu:");
+                Console.WriteLine($"Profil: {currentUser.Name}");
                 Console.WriteLine("1. Show Users");
                 Console.WriteLine("2. Go Chat");
-                Console.WriteLine(currentUser == null ? "3. Login" : "3. Logout");
-                Console.WriteLine("4. Register");
+                Console.WriteLine("3. Logout");
                 Console.Write("Seciminiz: ");
 
                 string? choice = Console.ReadLine();
@@ -184,26 +205,7 @@ namespace Telegram_NotBanedInRussiaExamClient
                 }
                 else if (choice == "3")
                 {
-                    if (currentUser == null)
-                    {
-                        Login();
-                    }
-                    else
-                    {
-                        Logout();
-                    }
-                }
-                else if (choice == "4")
-                {
-                    if (currentUser != null)
-                    {
-                        Console.WriteLine("Yeni account ucun evvel Logout edin.");
-                        Console.ReadLine();
-                    }
-                    else
-                    {
-                        Register();
-                    }
+                    Logout();
                 }
             }
         }
@@ -377,20 +379,30 @@ namespace Telegram_NotBanedInRussiaExamClient
             string senderId = parts[1];
             string messageType = parts[2];
             string content = string.Join("|", parts.Skip(3));
+            string senderName = "user " + senderId;
+
+            foreach (UserListItem user in lastUsers)
+            {
+                if (user.id.ToString() == senderId)
+                {
+                    senderName = user.username;
+                    break;
+                }
+            }
 
             Console.ForegroundColor = ConsoleColor.Green;
             if (messageType == "text")
             {
-                Console.WriteLine($"\n[User {senderId}]: {content}");
+                Console.WriteLine($"\n[{senderName}]: {content}");
             }
             else if (messageType == "file" || messageType == "voice")
             {
                 string savedPath = SaveIncomingFile(content, messageType);
-                Console.WriteLine($"\n[User {senderId}] {messageType} gonderdi: {savedPath}");
+                Console.WriteLine($"\n[{senderName}] {messageType} gonderdi: {savedPath}");
             }
             else
             {
-                Console.WriteLine($"\n[User {senderId}] [{messageType}]: {content}");
+                Console.WriteLine($"\n[{senderName}] [{messageType}]: {content}");
             }
             Console.ResetColor();
         }
